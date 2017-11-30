@@ -5,29 +5,37 @@ date: "November 24, 2017"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, echo = FALSE, warning = FALSE, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
-
-```{r EDA }
-#Read the crash CSV file
-library(tidyverse)
+#Section 1 - EDA
+Let's Load our Data and our Libraries in.
+```{r Loading Data, warning=FALSE, echo=FALSE, message = FALSE}
+#Read the crash CSV file and libraries
 library(plyr)
+library(tidyverse)
 library(readr)
+library(ggplot2)
 
 
-crash <- read.csv("C:/Users/bynum/Desktop/Rockhurst/BIA 6301 - Applied Data Mining/Assignment/Assignment 2/crash.csv", stringsAsFactors = TRUE)
+crash <- read.csv("C:/Users/abynum/Desktop/Rockhurst/BIA 6301 - Applied Data Mining/Assignment/Assignment 3/Fatal_crash_KProto/crash_raw.csv", stringsAsFactors = TRUE)
+
+```
+
+Using the Tidyverse Package, I want to explore my raw data.  I don't have any particular correlations that I'm looking for, so I am putting together plots just to see any interesting patterns:
+```{r EDA Genders, tidy=TRUE, warning=FALSE}
 
 
 #Bar graph of Genders in our dataset
 ggplot(data = crash) +
-  geom_bar()
+  geom_bar(aes(crash$Gender))
+```
+The Genders Plot reveals that there are twice as many males in this dataset as there are females.  Lets dig into this furhter:
 
+```{r EDA Gender-Alcohol, tidy=TRUE, message = FALSE,warning=FALSE}
 #separate alcohol vs. non-alcohol crashes
 crashalcohol = crash %>% filter(crash$Alcohol.Results > 0.00)
 crashnoalcohol = crash %>% filter(crash$Alcohol.Results == 0.00)
-
 
 
 #Histogram of Make to female blood alcohol level
@@ -36,11 +44,12 @@ ggplot(data = crashalcohol) +
   facet_wrap(~crashalcohol$Gender, nrow = 2)+
   xlab("Alcohol Level")+
   ylab("Count")
-  
-crashalcohol %>% count(crashalcohol$Gender)
-crashnoalcohol %>% count(crashnoalcohol$Gender)
+
+```
+Plotting gender against blood alcohol content shows that Males from this dataset were involved in more instances of fatal crashes involving alcohol at a higher blood alcohol content than females.
 
 
+```{r EDA Age-Alcohol, tidy=TRUE, message = FALSE, warning=FALSE}
 #Plotting Age vs. Alcohol Levels
 ggplot(data = crashalcohol) +
   geom_point(mapping = aes(y = crashalcohol$Alcohol.Results, x = crashalcohol$Age), color = "Purple") +
@@ -51,6 +60,11 @@ ggplot(data = crashalcohol) +
   scale_x_continuous("Age") +
   scale_y_continuous("Alcohol Level")
 
+```
+We begin to see something interesting from our plots.  In the Midwest, South and West, we seem to see some type of increase in blood alcohol content around age 25 continuing into the early 30s, a dip in the BAC in mid-30s to late 40s, then another sharp increase until there is a decline after the age of 50.  This could indicate that indiviudals stop drinking as heavy during their mid-30s and then begin to drink heavier and get behind the wheel after a certain age.
+
+
+```{r EDA Gender Region-Alcohol, tidy=TRUE, warning=FALSE}
 #Gender to Region
 genderdf = crash %>% filter(crash$Gender == "Female" | crash$Gender == "Male")
 
@@ -58,90 +72,77 @@ ggplot(data = genderdf) +
   geom_bar(mapping = aes(x = genderdf$Gender)) +
   facet_grid(.~ Region)
 
+```
 
+```{r EDA Drugs-Region, tidy=TRUE, warning=FALSE}
 #Drug involvement by State
 
 
 drugdf = crash %>% filter(crash$Drug.Involvement == "Yes")
 
-
-count(drugdf$Drug.Involvement, drugdf$State)
-
 ggplot(data = drugdf) +
   geom_bar(mapping = aes(x = drugdf$Drug.Involvement)) +
   facet_grid(.~ Region)
-
-
-lapply(crash, class)
 ```
 
+
+#Section 2 - Clustering
  
+The KProto function in the clustMixType package requires the data to be of either factor or numeric type.  We will convert the variables.
+```{r pressure, echo=FALSE, tidy=TRUE, message = FALSE, warning=FALSE}
 
-```{r pressure, echo=FALSE}
-
-crash_clean <- read.csv("C:/Users/abynum/Desktop/Rockhurst/BIA 6301 - Applied Data Mining/Assignment/Assignment 2/crash_raw.csv", stringsAsFactors = FALSE, as.is = TRUE)
+crash_clean <- read.csv("C:/Users/abynum/Desktop/Rockhurst/BIA 6301 - Applied Data Mining/Assignment/Assignment 3/Fatal_Crash_KProto/crash_cleaned.csv", stringsAsFactors = FALSE, as.is = TRUE)
 
 
 library(clustMixType)
 
-#Check for missing values
-sapply(crash_clean, function(x) sum(is.na(x)))
 
 
- #Convert Binary data to factors
-crash_clean [, 2:75] = lapply(crash_clean[,2:75], factor)
-
+#Convert imported data to factors
+crash_clean = lapply(crash_clean[,1:16], factor)
+crash_clean = as.data.frame(crash_clean)
 
 #Convert Continuous to Numeric
 crash_clean$Fatalities = as.numeric(crash_clean$Fatalities)
 crash_clean$Age = as.numeric(crash_clean$Age)
-crash_clean$Alcohol_recorded = as.numeric(crash_clean$Alcohol_recorded)
-crash_clean$crash_year = as.factor(crash_clean$crash_year)
-crash_clean$crash_month = as.factor(crash_clean$crash_month)
-crash_clean$crash_day = as.factor(crash_clean$crash_day)
-crash_clean$crash_weekday = as.factor(crash_clean$crash_weekday)
+crash_clean$Alcohol.recorded = as.numeric(crash_clean$Alcohol.Recorded)
+crash_clean$Crash.Date.year = as.numeric(crash_clean$Crash.Date.year)
+crash_clean$Crash.Date.month = as.factor(crash_clean$Crash.Date.month)
+crash_clean$Crash.Date.day.of.month = as.factor(crash_clean$Crash.Date.day.of.month)
+crash_clean$Crash.Date.day.of.week = as.factor(crash_clean$Crash.Date.day.of.week)
+```
 
 
-
+How many groups should we decide on?  I will use the elbow method to help determine the optimal number of clusters.  
+```{r Elbow Plot, tidy=TRUE, warning=FALSE}
 #Elbow Method for finding the optimal number of clusters
 set.seed(123)
 # Compute and plot wss for k = 2 to k = 15.
 
-crash_clean = na.omit(crash_clean)
 
-table(is.na(crash_clean)) 
+myData <- crash_clean
+myData = as.data.frame(myData)
 
-mydata <- as.data.frame(unclass(crash_clean))
-summary(mydata)
-dim(mydata)
-dist(mydata)
-
-
-rapply( mydata, f=function(x) ifelse(is.nan(x),0,x), how="replace" )
-
-dist(mydata[,2])
-wss =  (nrow(myDataClean[2:75])-1)*sum(apply(myDataClean[2:75],2,var))
-  for (i in 2:15) wss[i] <- sum(kmeans(myDataClean[2:75],
-                                  centers=i)$withinss)
-
-wss
+wss =  (nrow(myData)-1)*sum(apply(myData,2,var))
+  for (i in 2:15) wss[i] <- sum(kproto(myData,
+                                  i)$withinss)
+#Plot Elbow
 plot(1:15, wss, type="b", xlab="Number of Clusters",
      ylab="Within groups sum of squares")
 
-lapply(mydata, class)
-
-#K=7 Clusters
-set.seed(2345)
-k7 = kproto(crash_clean, k = 7, nstart = 25 )
-
-k7$centers
-
-
-#K=10 Clusters
-set.seed(2345)
-k10 = kproto(crash, k = 10)
-
-k10$size
 ```
+Using the formula to create the elbow plot, we see that the first major bend is around cluster 4.  This can be a good starting point for us.
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r kProto 4 clusters, tidy=TRUE, warning=FALSE, message = FALSE}
+#K=4 Clusters
+set.seed(2345)
+k4 = kproto(crash_clean, k = 4, nstart = 25 )
+clprofiles(k4, crash_clean, vars = NULL)
+
+
+```
+The clprofiles plots shows use the profiles of the different clusters.  We can start seeing the differences in our clusters.  It's worth exploring if adding more clusters creates another dissimilar group.
+
+
+
