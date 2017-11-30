@@ -1,0 +1,642 @@
+---
+title: 'Week 3: Cross Validation & Data Preprocessing'
+author: "Xuan Pham & San Cannon"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# R Packages
+
+The packages you will need for this week include **rpart**, **rpart.plot**, **caret**, **tidyverse**, **ggplot2**, **ROCR**, and **gplots**. gplots is needed so ROCR can run. 
+
+```{r packages}
+
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(ggplot2)
+library(tidyverse)
+library(ROCR)
+```
+
+# Revisiting Cross-Industry Standard Process for Data Mining (CRISP-DM)  
+
+You have seen the CRISP-DM cycle in BIA 6300 (Business Intelligence). In the past two weeks, we have spent time in **Step 4: Model Building**. In this week's discussion, we will focus on **Step 5 (Testing and Evaluation)** and **Step 3 (Data Preparation)**. The first part of our discussion will focus on Step 5, and we will use the same **prescribers** data set. We will then discuss Step 2 using a new data set, **movies_metadata**. 
+
+![CRISP-DM](http://1.bp.blogspot.com/-lYMQymum-3A/Ug4gBo-C4RI/AAAAAAAACyo/XF2LSI3uG08/s1600/Six-Step+CRISP-DM+Process.JPG)
+
+# Part 1: Performance Evaluation
+
+##What's the Expected Performance of a Model? 
+
+The best way to measure performance is to know the **true error rate**. The true error rate is calculated by comparing the model's predictions against actual outcomes in the **entire population**.  In reality, we usually are not working with the whole population. We are working with one or more samples from the population; hence, we do not know the true error rate. 
+
+### Naive Approach 
+
+A **naive** way to estimate the true error rate is to apply our model to the entire sample (i.e. training dataset) and then calculate the error rate. The naive approach has several drawbacks:
+
+* Final model will overfit the training data. The problem is magnified when a model has a large number of parameters.  
+
+* Estimated error rate is likely to be lower than the true error rate.  
+
+A better approach than the naive method is **resampling**.   
+
+
+### Resampling   
+
+Resampling refers to drawing repeated samples from the sample(s) we have. The goal of resampling is to gauge performances of competing models. *Resampling is our attempt to simulate the conditions needed to calculate the true error rate.*  
+
+Four major resampling methods:  
+
+1. one-fold cross validation  
+
+2. k-fold cross validation & repeated k-fold cross validation  
+
+3. leave-one-out cross validation  
+
+4. bootstrapping    
+
+
+#### One-Fold Cross Validation
+
+We touched on the validation set approach in the first two weeks of class. In particular, the validation set approach involves randomly dividing the known observations into two subgroups: a) a **training set** and b) a **test set**. We fit our model with the training set and then tests the model's performance on the test set. Common splits include 60-40 (60% training set and 40% test set), 70-30, and 80-20.
+
+
+Remember that our target variable is Opioid.Prescriber, where "1" means a practitioner is a frequent opioid prescriber and "0" means s/he is not a frequent opioid prescriber.  
+
+```{r prescribers}
+options(scipen = 999) #do not print scientific notation numbers
+prescribers<-read.csv("C:/Users/PhamX/Courses/Fall_2017/BIA_6301_BCB/Week_3/data/prescribers.csv")
+prescribers<-prescribers[,c(241,1:240,242:331)] #Rearranging the columns so that our target variable is first
+dim(prescribers)
+table(prescribers$Opioid.Prescriber)
+```
+
+Let's do a training set of 80% and validation set of 20%. We will build a decision tree model on 80% of the data set and then test the model's performance on the other 20% of the data set.   
+
+
+##### Approach #1: Manual Split
+
+set.seed(123)
+
+```{r manual.split}
+prescribers_train<-prescribers[1:20000, ]
+prescribers_test<-prescribers[20001:25000, ]
+
+dim(prescribers_train)
+dim(prescribers_test)
+prop.table(table(prescribers_train$Opioid.Prescriber)) 
+prop.table(table(prescribers_test$Opioid.Prescriber))
+```
+
+##### Approach #2: Random Draws 
+
+```{r random.draws}
+set.seed(123) #set a seed to do draws from a random uniform distribution.
+prescribers_random_draws <- prescribers[order(runif(25000)), ] 
+prescribers_train <- prescribers_random_draws[1:20000, ] #Training data set; 20000 observations
+prescribers_test  <-prescribers_random_draws[20001:25000, ]
+
+dim(prescribers_train)
+dim(prescribers_test)
+prop.table(table(prescribers_train$Opioid.Prescriber)) #notice the same proportion of opioid prescribers and non-prescribers.
+prop.table(table(prescribers_test$Opioid.Prescriber))
+```
+
+##### Approach #3: Using caret 
+
+```{r random.draws.caret}
+set.seed(123)
+trainIndex <- createDataPartition(prescribers$Opioid.Prescriber, p = .8,list = FALSE,times = 1)
+prescribers_train <- prescribers[trainIndex,]
+prescribers_test <- prescribers[-trainIndex,] #notice the minus sign
+
+dim(prescribers_train)
+dim(prescribers_test)
+prop.table(table(prescribers_train$Opioid.Prescriber)) #notice the same proportion of opioid prescribers and non-prescribers.
+prop.table(table(prescribers_test$Opioid.Prescriber))
+```
+
+
+##### Decision Tree Model Redux
+
+```{r elbowmethod}
+set.seed(123)
+prescribers_rpart_elbow <- rpart(prescribers_train$Opioid.Prescriber~., method="class", parms = list(split="gini"), control=rpart.control(maxdepth=5), data=prescribers_train)
+
+rpart.plot(prescribers_rpart_elbow, type=0, extra=101)
+
+rpart_pred <- predict(prescribers_rpart_elbow, prescribers_test, type="class")
+
+results.matrix <- confusionMatrix(rpart_pred, prescribers_test$Opioid.Prescriber, positive="yes")
+print(results.matrix)
+```
+
+
+In one fold cross validation, we have an estimated error rate that has high bias & variance. The way around the bias-variance tradeoff problem is by using **k-fold cross validation**. 
+
+![bias variance tradeoff](https://qph.ec.quoracdn.net/main-qimg-de907f5ea63c611c3e82c71dcc33295d)
+
+
+#### k-Fold Cross Validation
+
+k-fold cross validation is a resampling technique that divides the dataset into k groups, or folds, of equal size. Here is how it works:  
+
+1. Keep one fold as the validation set. Fit the model on the other k-1 folds.  
+
+2. Test fitted model on the validation set. Calculate the mean squared error (MSE) on the validation set. 
+
+3. Repeat Steps 1 & 2 over and over again so that a different fold is used as a validation set. **The true error rate is estimated as the average error rate of all repetitions.**  
+
+Use the **caret** package for this task.  
+
+We will divide the training set into 10-folds. Each fold will eventually be used as a validation set.
+
+```{r kfoldcv}
+fitControl <- trainControl(method="cv", number=10) #use fitControl to set options for k-fold cross validation
+
+set.seed(123)
+prescribers_10folds<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl) #notice we use the train function in caret and pass rpart through it
+prescribers_10folds
+```
+
+Now we calculate the error rate of the chosen decision tree on the validation set. 
+
+```{r kfoldcv.rpart}
+actual <- prescribers_test$Opioid.Prescriber
+predicted <- predict(prescribers_10folds, prescribers_test, type="raw")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+##### Kappa Statistic
+
+$$ Kappa = \frac{Pr(a) - Pr(e)}{1-Pr(e)} $$
+
+Where, 
+
+Pr(a): proportion of actual agreement between the classifier and the true values  
+
+Pr(e): proportion of expected agreement between the classifier and the true values
+
+Kappa "adjusts accuracy by accounting for the possibility of a correct prediction by **chance alone.** Kappa values range to a maximum number of 1, which indicates perfect agreement between the model's predictions and the true values--a rare occurrence. Values less than one indicate imperfect agreement" (Lantz 2013, p. 303)
+
+
+|                   |Actual  |        |Marginal_Frequency    |
+|------------------:|-------:|-------:|---------------------:|
+|Prediction         |NO      |  YES   |                      |
+|NO                 |1829    |1157    |2986                  |
+|YES                |233     |1780    |2013                  |
+|-------------------|--------|--------|----------------------|
+|Marginal_Frequency |2062    |2937    |                      |
+
+
+"Ground truth": 2062 NO; 2937 YES  
+"Decision Tree Model": 2986 NO; 2013 YES 
+TOTAL = 5000
+
+```{r}
+
+Observed_Accuracy = (1829+1780)/5000 
+Expected_Accuracy_NO = (2986*2062)/5000
+Expected_Accuracy_YES = (2031*2937)/5000
+Expected_Accuracy_BOTH_CLASSES = (Expected_Accuracy_NO+Expected_Accuracy_YES)/5000
+Kappa_Statistic = (Observed_Accuracy-Expected_Accuracy_BOTH_CLASSES)/(1-Expected_Accuracy_BOTH_CLASSES)
+
+table<-cbind(Observed_Accuracy,Expected_Accuracy_NO,Expected_Accuracy_YES,Expected_Accuracy_BOTH_CLASSES, Kappa_Statistic)
+
+table_t<-t(table)
+
+colnames(table_t)<-c("value")
+
+
+library(knitr)
+kable(table_t)
+```
+
+#### What's a Good Kappa Value?
+
+There is no one answer. 
+
+Landis & Koch (1977):
+
+| Range      | Strength      |  
+|------------|---------------|
+| 0 - 0.2    | Poor          |
+| 0.21 - 0.4 | Fair          |
+| 0.41 - 0.6 | Moderate      |  
+| 0.61 - 0.8 | Substantial   |  
+| 0.81 - 1.0 | Almost perfect|
+
+
+Fleiss (1981):
+
+
+| Range      | Strength      |  
+|------------|---------------|
+| 0 - 0.4    | Poor          |
+| 0.41 - 0.75| Fair to Good  |
+| 0.75 - 1   | Excellent     |  
+
+
+Be careful! Kappa is not the best metric if accuracy is not what you are after.  
+
+If you want caret to pick the best model using Kappa instead of Accuracy, you can change it via the metric option.  
+
+For more on kappa, here's a good [post](https://stats.stackexchange.com/questions/82162/cohens-kappa-in-plain-english). 
+
+
+
+```{r kfoldcv.kappa}
+#fitControl <- trainControl(method="cv", number=10) #use fitControl to set options for k-fold cross validation
+
+#set.seed(123)
+#prescribers_10folds<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Kappa", trControl=fitControl) #notice we use the train function in caret and pass rpart through it
+#prescribers_10folds
+```
+
+
+k-fold cross validation is still problematic, however. Vanwinckelen and Blockeel (2011) noted:  
+
+
+*In addition to bias, the results of a k-fold cross-validation also have high variance. If we run two different tenfold cross-validations for the same learners on the same data set S, but with different random partitioning of S into subsets S(i), these two cross-validations can give quite different results. An estimate with smaller variance can be obtained by repeating the cross-validation several times, with different partitionings, and taking the average of the results obtained during each cross-validation* (page 2).
+
+
+#### Repeated k-fold Cross Validation
+
+Repeated k-fold cross validation "repeats" the k-fold cross validation over and over again and stops at some prespecified number of times. 
+
+```{r repeatedkfoldcv}
+fitControl <- trainControl(method="cv", number=10, repeats=5) #10-fold cross validation #repeated 5 times.
+
+set.seed(123)
+prescribers_10folds_rp<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl)
+prescribers_10folds_rp
+
+actual <- prescribers_test$Opioid.Prescriber
+predicted <- predict(prescribers_10folds_rp, prescribers_test, type="raw")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+
+#### Leave-one-out Cross Validation (LOOCV)
+
+Repeated k-fold cross validation can help reduce the high variance problem, but we still have to deal with the high bias problem. A way to minimize the bias problem is to do LOOCV. The technique is a degenerate case of k-fold cross validation, where K is chosen as the total number of observations. LOOCV uses all observations as the training set and leaves one observation out as the test set. The process repeats until all observations have been used as a validation set.
+
+LOOCV is very computationally intensive!!
+
+```{r loocv}
+
+#fitControl <- trainControl(method="LOOCV") #10-fold cross validation
+
+#set.seed(123)
+#prescribers_loocv<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=fitControl)
+#prescribers_loocv
+
+#actual <- prescribers_test$Opioid.Prescriber
+#predicted <- predict(prescribers_loocv, prescribers_test, type="raw")
+#results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+#print(results.matrix)
+```
+
+#### Bootstrapping 
+
+Bootstrapping is a resampling technique that obtain distinct datasets by repeatedly sampling observations from the original dataset with replacement. 
+
+Each boostrapped dataset is created by sampling with replacement and is the same size as the original dataset. Consequently, some observations may appear more than once in a given boostrapped dataset while other observations may not appear at all.
+
+Note: The default method in the train() function in the caret package is the bootstrap.
+
+```{r bootstrap}
+cvCtrl <- trainControl(method="boot", number=10) #10 bootstrapped samples.
+set.seed(123)
+prescribers_bootstrap<-train(Opioid.Prescriber~., data=prescribers_train, method="rpart", metric="Accuracy", trControl=cvCtrl)
+prescribers_bootstrap
+
+actual <- prescribers_test$Opioid.Prescriber
+predicted <- predict(prescribers_bootstrap, prescribers_test, type="raw")
+results.matrix <- confusionMatrix(predicted, actual, positive="yes")
+print(results.matrix)
+```
+
+
+## Last Words on Resampling
+
+A question you may be pondering about is "how many folds should I use?" The answer depends on the size of the dataset. For large datasets, you can use a small number of folds and still get an accurate error estimate. For smaller datasets, you may have to use LOOCV. You should remember these rules:
+
+---
+
+**BIAS-VARIANCE TRADEOFF WITH RESAMPLING**
+
+**Small number of folds** = error estimate is more biased but also has lower variance. Computationally less intensive.   
+
+**Large number of folds** = error estimate is less biased but also has higher variance. More computationally intensive. 
+
+---
+
+#### ROC Curve: One More Performance Evaluation Metric 
+
+The ROC (receiver operating characteristics) curve displays the true positive rate (sensitivity) against the false positive rate (1-specificity). The closer the curve follows the left hand border and then the top left border of the ROC space, the more accurate the model.
+
+Here's an example:  
+
+![ROC Curve](http://gim.unmc.edu/dxtests/roccomp.jpg)
+
+```{r}
+#Create a ROC curve
+# assuming we already did boostrapping & created a decision tree model.
+# be sure to load the ROCR library first
+rpart_pred_prob <- predict(prescribers_bootstrap, prescribers_test, type="prob") #notice the change from raw to prob
+rpart_pred_prob_2 <- prediction(rpart_pred_prob[,2], prescribers_test$Opioid.Prescriber)
+rpart.perf <- performance(rpart_pred_prob_2,"tpr","fpr")
+plot(rpart.perf, main = "ROC Curve for Bootstrapping Decision Tree Model", col=2, lwd=2)
+abline(a=0,b=1,lwd=2,lty=2,col="gray")
+
+unlist(rpart.perf@y.values) #This is the AUC value (area under the ROC curve)
+```
+
+
+
+# Part 2: Data Preprocessing 
+
+## Let's Talk Data Quality
+
+According to Han, Kamber, and Pei (2012), data quality consists of six elements:  
+
+* Accuracy  
+* Completeness  
+* Consistency  
+* Timeliness  
+* Believability  
+* Interpretability  
+
+Achieving a high level of data quality is the reason for data preprocessing.
+
+Link to a section from [Han, Kamber, and Pei text](http://mercury.webster.edu/aleshunas/Support%20Materials/Data_preprocessing.pdf)
+
+## Two Tasks of Data Preprocessing  
+
+* Data Cleaning: fill in missing values; smoothing noisy data; identifying and removing outliers; and resolving inconsistencies.  
+
+* Data Transformation: normalization; discretization; and concept hierarchy generation.  
+
+
+## Dataset 
+
+We are going to examine a dataset containing 5,000+ movies from IMDb. The owner of the data set is [Chuan Sun](https://nycdatascience.com/blog/student-works/machine-learning/movie-rating-prediction/).  
+
+```{r}
+IMDb<-read.csv("C:/Users/PhamX/Courses/Fall_2017/BIA_6301_BCB/Week_3/data/movie_metadata.csv", stringsAsFactors = FALSE)
+```
+
+### Exploratory Data Analysis  
+
+Here are the numeric columns in this data set:  
+
+| Column.Name              | Position | 
+|--------------------------|----------|
+| num_critic_for_reviews   | 3        |
+| duration                 | 4        |   
+| director_facebook_likes  | 5        |
+| actor_3_facebook_likes   | 6        |  
+| actor_1_facebook_like    | 8        |
+| gross                    | 9        |
+| num_voted_users          | 13       |
+| cast_total_facebook_likes| 14       |
+| facenumber_in_poster     | 16       |
+| num_user_for_reviews     | 19       |
+| budget                   | 23       |
+| actor_2_facebook_likes   | 25       |
+| imdb_score               | 26       |
+| aspect_ratio             | 27       |
+| movie_facebook_likes     | 28       |
+| title_year               | 24       |
+
+
+
+And the non-numeric columns:  
+
+| Column.Name              | Position | 
+|--------------------------|----------|
+| color                    | 1        |
+| director_name            | 2        |   
+| actor_2_name             | 7        |
+| genres                   | 10       |  
+| actor_1_names            | 11       |
+| movie_title              | 12       |
+| plot_keywords            | 17       |
+| movie_imdb_link          | 18       |
+| language                 | 20       |
+| country                  | 21       |
+
+
+#### Challenge: Part #1 
+
+A major flaw exists in one of the variables in this dataset. Can you use exploratory data analysis to find the problematic variable? Hint: It's a numeric variable. 
+
+[Insert your codes]
+
+
+
+
+### Introducing tidyverse Package
+
+
+```{r tidyverse}
+
+IMDb_USA <- filter(IMDb, country=="USA") #filter is in the tidyr package which is part of tidyverse
+
+```
+
+## Plot Keywords & Genres
+
+Only the first five plot keywords are captured from the web scrapping exercise. Here's the full IMDB page for the movie [Avatar](http://www.imdb.com/title/tt0499549/?mode=desktop&ref_=m_ft_dsk).
+
+```{r plotkeywords}
+IMDb_USA_2 <- IMDb_USA %>% separate(plot_keywords, c("plot_keyword_1", "plot_keyword_2", "plot_keyword_3", "plot_keyword_4", "plot_keyword_5"), sep = "\\|")
+```
+
+We will only keep the first three tagged genres.
+```{r moviegenres}
+IMDb_USA_3 <- IMDb_USA_2 %>% separate(genres, c("genre_1", "genre_2", "genre_3"), sep ="\\|")
+```
+
+I could have also use "pipes" to write everything above and then output it into one final data frame--no intermediate outputs. 
+
+```{r pipes}
+#IMDb_USA_pipes <- IMDb_USA %>% separate(plot_keywords, c("plot_keyword_1", "plot_keyword_2", "plot_keyword_3", "plot_keyword_4", "plot_keyword_5"), sep = "\\|") %>% separate(genres, c("genre_1", "genre_2", "genre_3"), sep ="\\|")
+```
+
+For more information on tidyverse, see ["R for Data Science" free book](http://r4ds.had.co.nz/)
+
+```{r count.key.words}
+plot_keys <- as.data.frame(IMDb_USA_2[,17:21])
+plot_keys_count <- as.data.frame(table(unlist(plot_keys)))
+
+plot_key_top_n <- plot_keys_count[order(-plot_keys_count$Freq),]
+
+plot_key_top_n <- plot_key_top_n[-6,] #remove blank
+
+head(plot_key_top_n,20)
+
+
+
+plot_key_top_n_20 <- subset (plot_key_top_n, Freq >= 45)
+
+ggplot (data = plot_key_top_n_20, 
+            aes (Freq, Var1)) +
+           geom_point (aes (color = factor (Var1)), size = 4) #in ggplot2 package 
+```
+
+
+# Data Transformation
+
+## Discretization & Concept Hierarchies
+
+Discretization is the process of turning a numeric attribute into interval labels. The purpose of discretization is to reduce the number of unique values in the data mining process. This is particularly useful for large datasets.
+
+Concept hierarchies replace "lower level" raw data with "higher level" categories.
+
+```{r duration}
+IMDb_USA_3<-IMDb_USA_2
+IMDb_USA_3<-IMDb_USA_3[,c(3:6,8:9,13:14,16,19,23,25:28)] #numeric variables
+hist(IMDb_USA_3$duration)
+
+summary(IMDb_USA_3$duration) #notice the 6 NA cases
+quantile(IMDb_USA_3$duration,prob = seq(0, 1, length = 6),na.rm=TRUE)
+```
+
+### Using Percentile Rank
+
+Let's create a factor variable for movie length (duration). 1 = shortest; 5 = longest.
+
+```{r duration.perc.rank}
+IMDb_USA_3<-within(IMDb_USA_3,quantile<-as.integer(cut(duration,quantile(IMDb_USA_3$duration,prob = seq(0, 1, length = 6), na.rm=TRUE))))
+
+IMDb_USA_3$quantile<-as.character(IMDb_USA_3$quantile)
+
+IMDb_USA_3$movie_length_perc <-factor(IMDb_USA_3$quantile,levels=c(1,2,3,4,5), labels=c("Bottom Quantile", "Second Quantile","Third Quantile","Fourth Quantile","Highest Quantile"))
+
+summary(IMDb_USA_3$movie_length_perc) #notice the 7 missing NA cases.
+```
+
+Let's investigate a bit further.
+
+```{r duration.NAs}
+IMDb_USA_3[is.na(IMDb_USA_3$duration),]
+IMDb_USA_3[is.na(IMDb_USA_3$movie_length_perc),]
+```
+
+So it seems that the shortest movie (observation 1921) was left out of the Bottom Quantile. We should go back to the previous code chunk & give the observation a quantile value = 1 (Bottom Quantile). The above code chunk needs to be run again as well.
+
+```{r duration.recode.prob}
+IMDb_USA_3[1921,16]<-1 #this is the movie with the shortest duration. It got left out during the process of creating quantiles.
+
+#re-run codes that create factors
+IMDb_USA_3$movie_length_perc <-factor(IMDb_USA_3$quantile,levels=c(1,2,3,4,5), labels=c("Bottom Quantile", "Second Quantile","Third Quantile","Fourth Quantile","Highest Quantile"))
+
+#now we only have 6 NA's
+summary(IMDb_USA_3$movie_length_perc)
+```
+
+### Using Histogram
+
+Most movies are between 100 to 150 minutes.
+
+```{r duration.hist}
+hist(IMDb_USA_3$duration)
+summary(IMDb_USA_3$duration)
+
+IMDb_USA_3$movie_length_hist<-
+  ifelse(IMDb_USA_3$duration<=100,"Short",
+    ifelse (IMDb_USA_3$duration<=150, "Average",
+      ifelse(IMDb_USA_3$duration<=511, "Long",
+        ifelse(is.na(IMDb_USA_3$duration), "NA"))))
+
+table(IMDb_USA_3$movie_length_hist) 
+# does not report the NA observations but they are still there.
+# 1979 "Average" + 143 "Long" + 1679 "Short" = 3801. There are 3,807 total observations. So yes, still 6 NA cases.
+```
+
+
+## Normalization
+
+Normalization is when numeric attribute is transformed to be on a smaller scale. Normalization is useful for data mining techniques that uses a distance measure (knn; cluster analysis).
+
+### Min-Max Normalization
+
+![](https://cdn-images-1.medium.com/max/800/0*GQifNArAb4PPGJ6n.jpg)
+
+
+```{r budget.minmax}
+
+normalize<- function(x,na.rm=TRUE){(x-min(x,na.rm=TRUE))/(max(x,na.rm=TRUE)-min(x.na.rm=TRUE))}
+IMDb_USA_3$budget_norm<-normalize(IMDb_USA_3$budget)
+
+summary(IMDb_USA_3$budget_norm) #Checking the range
+```
+
+
+### Z-Score Normalization (Or Mean Zero Normalization)
+
+![](https://s-media-cache-ak0.pinimg.com/originals/70/db/af/70dbaf3b130b15f952abadf8d6f10fbf.jpg)
+
+![](https://statistics.laerd.com/statistical-guides/img/Standard_Score_Calc.gif)
+
+
+```{r budget.scale}
+IMDb_USA_3$budget_z<-(IMDb_USA_3$budget - mean(IMDb_USA_3$budget,na.rm=TRUE))/sd(IMDb_USA_3$budget,na.rm=TRUE)
+
+summary(IMDb_USA_3$budget_z)
+
+#Alternatively, the scale() function in base R does the same thing: 
+summary(scale(IMDb_USA_3$budget))
+```
+
+  
+### Z Normalization with Mean Absolute Deviation (MAD)
+
+More robust to outliers.
+
+```{r budget.mad}
+IMDb_USA_3$budget_z_mad<-(IMDb_USA_3$budget - mean(IMDb_USA_3$budget,na.rm=TRUE))/mad(IMDb_USA_3$budget,na.rm=TRUE)
+summary(IMDb_USA_3$budget_z_mad)
+```
+
+
+### Decimal Scaling
+![](https://image.slidesharecdn.com/statdm-110906051117-phpapp01/95/statistics-and-data-mining-26-728.jpg?cb=1315286218)
+
+```{r budget.decscale}
+max_budget<-max(IMDb_USA_3$budget, na.rm=TRUE)
+
+digits <- floor(log10( max_budget))+1
+
+print(digits)
+
+IMDb_USA_3$budget_decimal<-(IMDb_USA_3$budget)/(10^(digits))
+
+summary(IMDb_USA_3$budget_decimal)
+```
+
+Note: Digits code chunk above is from [here](http://stackoverflow.com/questions/6655754/finding-the-number-of-digits-of-an-integer)
+
+
+Let's clean up what we have done.  
+
+```{r budget.clean.up}
+IMDb_USA_3$budget_norm<-NULL
+IMDb_USA_3$budget_z_mad<-NULL
+IMDb_USA_3$budget_z<-NULL
+IMDb_USA_3$budget_decimal<-NULL
+```
+
+
+# Class Challenge: Part #2  
+
+Can you use EDA to come up with a definition for a blockbuster movie? What variable(s) would you look at and why?  
+
+
